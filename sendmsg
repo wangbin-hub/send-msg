@@ -1,0 +1,52 @@
+#!/usr/bin/python3
+from flask import Flask, request
+from urllib.request import unquote
+import json,requests,threading,queue,re,time,logging,configparser
+q = queue.Queue()
+logging.basicConfig(level=logging.INFO,
+                format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s')
+app = Flask(__name__)
+app.debug = True
+@app.route('/send',methods=["POST","GET"])
+def send():
+    if request.method=='POST':
+        data = request.get_data().decode("utf-8")
+        q.put(unquote(data))
+        return "successful"
+    else:
+        return  "get successful"
+def dingding(result,url):
+    test = "告警等级：%s\n告警主机：%s\n告警类型：%s\n告警指标：%s\n当前次数：%s\n通知时间：%s\n"\
+            %(result["level"],result["host"],result["metric"],result["value"],result["count"],result["time"])
+    head = {"content-Type": "Application/json;charset:utf-8"}
+    content = {
+        "msgtype": "text",
+        "text": {
+            "content": test
+        },
+        "at": {
+            "atMobiles": [
+                ""
+            ]
+        }
+    }
+    logging.info(requests.post(url, data=json.dumps(content), headers=head).content)
+def sendmsg(url):
+    while True:
+        if not q.empty():
+            msg = q.get()
+            parse_msg = re.search(r'\[(.*)\]\[(.*)\]\[(.*)\]\[(.*)\]\[(.*)\]\[(.*)\]', msg.split('=', 1)[1], re.M | re.I)
+            result ={"level":parse_msg.group(1),"host":parse_msg.group(3),"metric":parse_msg.group(5).split("+")[2], \
+                           "value":parse_msg.group(5).split("++")[1],"count":parse_msg.group(6).split("+")[0],\
+                     "time":"{} {}".format(parse_msg.group(6).split('+')[1],parse_msg.group(6).split('+')[2])}
+            logging.info(result)
+            dingding(result,url)
+        time.sleep(1)
+if __name__ == '__main__':
+    config = configparser.ConfigParser()
+    config.read("config.ini",encoding="utf-8")
+    url = config.get("default","url")
+    host = config.get("default","host")
+    port = config.get("default", "port")
+    threading.Thread(target=sendmsg,args=(url,)).start()
+    app.run(host=host, port=port)
